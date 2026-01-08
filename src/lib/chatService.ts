@@ -18,6 +18,7 @@ export type ChatMessage = {
   id: string;
   room_id: string;
   user_email: string;
+  user_name?: string | null;// edit
   content: string | null;
   message_type: "text" | "file";
   file_url?: string | null;
@@ -28,6 +29,18 @@ export type ChatMessage = {
   created_at: string;
 };
 
+//edit
+async function getProfileName(email: string) {
+  const supabase = createClient();
+  const { data } = await supabase
+    .from("profiles")
+    .select("user_name")
+    .eq("email", email)
+    .single();
+  
+  // Return the name, or fall back to the email prefix if name is missing
+  return data?.user_name || email.split("@")[0];
+}
 export const CHAT_LABELS: { id: ChatLabel; name: string }[] = [
   { id: null, name: "Unlabeled" },
   { id: "team-match", name: "Team Match" },
@@ -175,11 +188,13 @@ export async function sendTextMessage({
   user: SessionUser;
 }) {
   const supabase = createClient();
+  const userName = await getProfileName(user.email);
   const { data, error } = await supabase
     .from("messages")
     .insert({
       room_id: roomId,
       user_email: user.email,
+      user_name: userName,
       content,
       message_type: "text",
     })
@@ -219,11 +234,14 @@ export async function sendFileMessage({
   user: SessionUser;
 }) {
   const supabase = createClient();
+
+  const userName = await getProfileName(user.email);
   const { data, error } = await supabase
     .from("messages")
     .insert({
       room_id: roomId,
       user_email: user.email,
+      user_name: userName,
       content: fileMeta.url,
       message_type: "file",
       file_url: fileMeta.url,

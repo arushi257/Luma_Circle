@@ -431,7 +431,7 @@ export default function Home() {
                     }}
                     className={`text-xs font-medium underline ${textMuted} hover:${textStrong} transition`}
                   >
-                    {loginMode === "password" ? "Use OTP instead" : "Back to password login"}
+                    {loginMode === "password" ? "Sign up" : "Back to login"}
                   </button>
                 </div>
               )}

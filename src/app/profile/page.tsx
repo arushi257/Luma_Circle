@@ -2,14 +2,14 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useClientSession } from "@/lib/auth"; // Ensure this path is correct for your project
-import { useTheme } from "@/context/ThemeContext"; // Ensure this path is correct
-import { fetchProfile, isUsernameTaken, upsertProfile, updateUserPassword } from "@/lib/profileService"; // Ensure these functions are implemented
+import { useClientSession } from "@/lib/auth";
+import { useTheme } from "@/context/ThemeContext";
+import { createClient } from "@/utils/supabase/client";
 
 function ProfileContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { session, ready } = useClientSession({ require: true }); 
+  const { session, ready } = useClientSession({ require: true });
   const { isDark } = useTheme();
 
   // Styles
@@ -31,9 +31,9 @@ function ProfileContent() {
     ? "border-[#9b65ff]/40 bg-[#7c3aed] text-white shadow-lg shadow-[#8f63ff]/40 hover:bg-[#6d28d9] hover:shadow-[#8f63ff]/50"
     : "border-amber-300 bg-amber-500 text-white shadow-lg shadow-amber-200 hover:bg-amber-400";
 
-  const [name, setName] = useState("");
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
+  // 1. UPDATED STATE NAMES
+  const [fullName, setFullName] = useState("");
+  const [userName, setUserName] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -45,12 +45,23 @@ function ProfileContent() {
     if (!ready || !session) return;
 
     async function loadProfile() {
-      if (!session) return;
+      const supabase = createClient();
       try {
-        const profile = await fetchProfile(session.email);
-        if (profile) {
-          setName(profile.name || "");
-          setUsername(profile.username || "");
+        const { data, error } = await supabase
+          .from("profiles")
+          // 2. UPDATED SELECT QUERY: Asking for the new column names
+          .select("full_name, user_name") 
+          .eq("email", session?.email)
+          .single();
+
+        if (error && error.code !== "PGRST116") {
+           console.error("Error loading profile:", error);
+        }
+
+        if (data) {
+          // 3. UPDATED MAPPING: Using the new keys from data
+          setFullName(data.full_name || "");
+          setUserName(data.user_name || "");
         }
       } catch (err) {
         console.error("Failed to load profile", err);
@@ -69,55 +80,37 @@ function ProfileContent() {
 
     if (!session) return;
 
-    // --- Validation ---
-    if (!name.trim()) {
+    if (!fullName.trim()) {
       setError("Name is required.");
       return;
     }
 
-    if (!username.trim()) {
+    if (!userName.trim()) {
       setError("Username is required.");
       return;
     }
 
-    if (isSetupMode && !password.trim()) {
-      setError("Password is required for initial setup.");
-      return;
-    }
-
     setSaving(true);
+    const supabase = createClient();
 
     try {
-      // 1. Check if Username is Taken
-      if (username.trim()) {
-        const taken = await isUsernameTaken(username.trim(), session.email);
-        if (taken) {
-          throw new Error("Username is already taken. Please choose another.");
+      // 4. UPDATED SAVE: Using .update() and the new column names
+      const { error: updateError } = await supabase
+        .from("profiles")
+        .update({
+          full_name: fullName.trim(),
+          user_name: userName.trim(),
+        })
+        .eq("email", session.email);
+
+      if (updateError) {
+        if (updateError.code === "23505") {
+             throw new Error("This username is already taken.");
         }
+        throw new Error(updateError.message || "Failed to save profile.");
       }
 
-      // 2. Update Password (if provided)
-      if (password.trim()) {
-        const passResult = await updateUserPassword(password);
-        if (!passResult.ok) {
-          throw new Error(passResult.error || "Failed to update password.");
-        }
-      }
-
-      // 3. Update Profile Data in Supabase
-      const profileResult = await upsertProfile({
-        email: session.email,
-        name: name.trim(),
-        username: username.trim(),
-      });
-
-      if (!profileResult.ok) {
-        throw new Error(profileResult.error || "Failed to save profile.");
-      }
-
-      // Success
       setMessage("Profile saved successfully!");
-      setPassword(""); // Clear password for security
 
       if (isSetupMode) {
         setTimeout(() => {
@@ -143,7 +136,6 @@ function ProfileContent() {
   return (
     <div className={`min-h-screen px-6 py-12 transition-colors duration-300 ${pageBackground}`}>
       <div className="mx-auto max-w-2xl space-y-8">
-        {/* Profile Section */}
         <div className={`rounded-xl border p-8 ${panelCard}`}>
           <h1 className="mb-6 text-2xl font-semibold">
             {isSetupMode ? "Complete Your Profile" : "Profile"}
@@ -151,7 +143,7 @@ function ProfileContent() {
 
           {isSetupMode && (
             <p className={`mb-6 text-sm ${textMuted}`}>
-              Please complete your profile to continue. This is a one-time setup.
+              Please set your display name and username to continue.
             </p>
           )}
 
@@ -165,59 +157,40 @@ function ProfileContent() {
                 disabled
                 className={`mt-1 w-full rounded-md border px-4 py-2 ${inputDisabled}`}
               />
+              <p className={`mt-1 text-xs ${textMuted}`}>Managed by Institutional Login</p>
             </div>
 
-            {/* Name */}
+            {/* Name Input */}
             <div>
               <label className={`block text-sm font-medium ${labelText}`}>
-                Name <span className="text-red-400">*</span>
+                Display Name <span className="text-red-400">*</span>
               </label>
               <input
                 type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
+                value={fullName} // Updated state
+                onChange={(e) => setFullName(e.target.value)} // Updated setter
                 placeholder="Enter your full name"
                 className={`mt-1 w-full rounded-md border px-4 py-2 focus:outline-none focus:ring-1 ${inputStyle}`}
                 required
               />
             </div>
 
-            {/* Username */}
+            {/* Username Input */}
             <div>
               <label className={`block text-sm font-medium ${labelText}`}>
                 Username <span className="text-red-400">*</span>
               </label>
               <input
                 type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
+                value={userName} // Updated state
+                onChange={(e) => setUserName(e.target.value)} // Updated setter
                 placeholder="Choose a unique username"
                 className={`mt-1 w-full rounded-md border px-4 py-2 focus:outline-none focus:ring-1 ${inputStyle}`}
                 required
               />
+              <p className={`mt-1 text-xs ${textMuted}`}>This will be visible in chats.</p>
             </div>
 
-            {/* Password */}
-            <div>
-              <label className={`block text-sm font-medium ${labelText}`}>
-                Password {isSetupMode && <span className="text-red-400">*</span>}
-              </label>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder={isSetupMode ? "Create a password" : "Leave blank to keep current"}
-                className={`mt-1 w-full rounded-md border px-4 py-2 focus:outline-none focus:ring-1 ${inputStyle}`}
-                required={isSetupMode}
-              />
-              {!isSetupMode && (
-                <p className={`mt-1 text-xs ${textMuted}`}>
-                  Enter a new password only if you want to change it
-                </p>
-              )}
-            </div>
-
-            {/* Messages */}
             {error && (
               <div className={`rounded-md border px-4 py-2 text-sm ${isDark ? "border-red-400/30 bg-red-900/20 text-red-300" : "border-red-200 bg-red-50 text-red-700"}`}>
                 {error}
@@ -230,7 +203,6 @@ function ProfileContent() {
               </div>
             )}
 
-            {/* Save Button */}
             <button
               type="submit"
               disabled={saving}
@@ -241,11 +213,28 @@ function ProfileContent() {
           </form>
         </div>
 
-        {/* Settings Section (placeholder) */}
+        {/* Account Management */}
         {!isSetupMode && (
           <div className={`rounded-xl border p-8 ${panelCard}`}>
-            <h2 className="mb-4 text-xl font-semibold">Settings</h2>
-            <p className={`text-sm ${textMuted}`}>Settings options will appear here.</p>
+            <h2 className={`mb-4 text-xl font-semibold ${labelText}`}>Account Security</h2>
+            <p className={`mb-4 text-sm ${textMuted}`}>
+              Need to change your password? We will send you an email link.
+            </p>
+            <button
+              onClick={async () => {
+                const supabase = createClient();
+                const { error } = await supabase.auth.resetPasswordForEmail(session!.email, {
+                    redirectTo: `${window.location.origin}/profile?mode=reset`,
+                });
+                if (error) alert(error.message);
+                else alert("Password reset email sent! Check your inbox.");
+              }}
+              className={`rounded-xl border px-4 py-2 text-sm font-medium transition ${
+                 isDark ? "border-white/20 hover:bg-white/10" : "border-slate-300 hover:bg-slate-50"
+              }`}
+            >
+              Send Password Reset Email
+            </button>
           </div>
         )}
       </div>
