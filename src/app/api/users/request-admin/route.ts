@@ -1,32 +1,36 @@
+import { createClient } from "@/utils/supabase/server";
 import { NextResponse } from "next/server";
-import { createAdminRequest } from "@/lib/userStore";
-
-const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export async function POST(request: Request) {
-  const { email } = await request.json();
+  const { targetUserId } = await request.json(); // Better to use ID than email for updates
+  const supabase = await createClient();
 
-  if (!email || typeof email !== "string" || !emailRegex.test(email)) {
-    return NextResponse.json(
-      { ok: false, message: "Enter a valid email address." },
-      { status: 400 },
-    );
+  // 1. Verify the requester is an Admin
+  const { data: { user } } = await supabase.auth.getUser();
+  
+  if (!user) {
+    return NextResponse.json({ ok: false, message: "Not authenticated" }, { status: 401 });
   }
 
-  const normalized = email.toLowerCase();
-  const result = createAdminRequest(normalized);
+  const { data: adminProfile } = await supabase
+    .from('profiles')
+    .select('role')
+    .eq('id', user.id) // Check the requester's ID
+    .single();
 
-  if (!result.ok) {
-    return NextResponse.json(
-      { ok: false, message: result.message ?? "Cannot request admin access." },
-      { status: 400 },
-    );
+  if (adminProfile?.role !== 'admin') {
+    return NextResponse.json({ ok: false, message: "Admin privileges required." }, { status: 403 });
   }
 
-  return NextResponse.json({
-    ok: true,
-    requestedAt: result.requestedAt ?? null,
-    alreadyRequested: Boolean(result.alreadyRequested),
-  });
+  // 2. Approve the target user
+  const { error } = await supabase
+    .from('profiles')
+    .update({ role: 'admin' })
+    .eq('id', targetUserId); // Using UUID is safer than email
+
+  if (error) {
+    return NextResponse.json({ ok: false, message: "Failed to approve user." }, { status: 500 });
+  }
+
+  return NextResponse.json({ ok: true });
 }
-

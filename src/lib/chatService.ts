@@ -1,5 +1,7 @@
-import { CHAT_STORAGE_BUCKET, getSupabaseClient } from "@/lib/supabaseClient";
-import type { SessionUser, UserRole } from "@/lib/auth";
+import { createClient } from "@/utils/supabase/client";
+import type { SessionUser } from "@/lib/auth";
+
+export const CHAT_STORAGE_BUCKET = "chat-uploads"; // Moved constant here
 
 export type ChatLabel = "team-match" | "mentor-mesh" | "lab-hub" | "admin" | null;
 
@@ -43,31 +45,22 @@ function generateInviteCode(length = 7) {
   return out;
 }
 
-async function ensureProfile(user: SessionUser) {
-  const supabase = getSupabaseClient();
-  const { error } = await supabase.from("profiles").upsert(
-    {
-      email: user.email,
-      role: (user.role ?? "member") as UserRole,
-      last_seen_at: new Date().toISOString(),
-    },
-    { onConflict: "email" },
-  );
-  if (error) throw error;
-}
-
 export async function listRoomsForUser(email: string, label: ChatLabel | "all" = "all") {
-  const supabase = getSupabaseClient();
-  const { data, error } = await supabase
+  const supabase = createClient();
+  
+  // 1. Find rooms where the user is a member
+  const { data: memberData, error } = await supabase
     .from("room_members")
     .select("room_id")
     .eq("user_email", email);
   if (error) throw error;
 
-  const roomIds = (data ?? []).map((row) => row.room_id);
+  const roomIds = (memberData ?? []).map((row) => row.room_id);
   if (!roomIds.length) return [];
 
+  // 2. Fetch room details
   let query = supabase.from("rooms").select("*").in("id", roomIds).order("created_at", { ascending: false });
+  
   if (label !== "all") {
     if (label === null) {
       query = query.is("label", null);
@@ -91,9 +84,8 @@ export async function createRoom({
   label: ChatLabel;
   user: SessionUser;
 }) {
-  const supabase = getSupabaseClient();
-  await ensureProfile(user);
-
+  const supabase = createClient();
+  
   let inviteCode = generateInviteCode();
   let attempts = 0;
   let inserted: ChatRoom | null = null;
@@ -115,12 +107,12 @@ export async function createRoom({
       break;
     }
 
+    // Retry if invite code collision happens
     if (error.code === "23505") {
       inviteCode = generateInviteCode();
       attempts += 1;
       continue;
     }
-
     throw error;
   }
 
@@ -128,14 +120,14 @@ export async function createRoom({
     throw new Error("Could not generate a unique invite code. Please try again.");
   }
 
-  const memberError = await addMemberToRoom(user.email, inserted.id);
-  if (memberError) throw memberError;
+  // Add creator as the first member
+  await addMemberToRoom(user.email, inserted.id);
 
   return inserted;
 }
 
 export async function addMemberToRoom(email: string, roomId: string) {
-  const supabase = getSupabaseClient();
+  const supabase = createClient();
   const { error } = await supabase.from("room_members").upsert(
     {
       room_id: roomId,
@@ -147,10 +139,9 @@ export async function addMemberToRoom(email: string, roomId: string) {
 }
 
 export async function joinRoomByCode({ code, user }: { code: string; user: SessionUser }) {
-  const supabase = getSupabaseClient();
-  await ensureProfile(user);
-
+  const supabase = createClient();
   const trimmed = code.trim().toUpperCase();
+  
   const { data, error } = await supabase.from("rooms").select("*").eq("invite_code", trimmed).single();
   if (error) throw error;
   if (!data) throw new Error("Room not found for that code.");
@@ -162,7 +153,7 @@ export async function joinRoomByCode({ code, user }: { code: string; user: Sessi
 }
 
 export async function fetchMessages(roomId: string, { limit = 50 } = {}) {
-  const supabase = getSupabaseClient();
+  const supabase = createClient();
   const { data, error } = await supabase
     .from("messages")
     .select("*")
@@ -183,9 +174,7 @@ export async function sendTextMessage({
   content: string;
   user: SessionUser;
 }) {
-  const supabase = getSupabaseClient();
-  await ensureProfile(user);
-
+  const supabase = createClient();
   const { data, error } = await supabase
     .from("messages")
     .insert({
@@ -208,8 +197,9 @@ export async function uploadAttachment({
   file: File;
   roomId: string;
 }) {
-  const supabase = getSupabaseClient();
+  const supabase = createClient();
   const path = `${roomId}/${Date.now()}-${crypto.randomUUID()}-${file.name}`;
+  
   const { error: uploadError } = await supabase.storage
     .from(CHAT_STORAGE_BUCKET)
     .upload(path, file, { cacheControl: "3600", upsert: false, contentType: file.type || "application/octet-stream" });
@@ -228,9 +218,7 @@ export async function sendFileMessage({
   fileMeta: { url: string; name: string; type: string; size: number; path: string };
   user: SessionUser;
 }) {
-  const supabase = getSupabaseClient();
-  await ensureProfile(user);
-
+  const supabase = createClient();
   const { data, error } = await supabase
     .from("messages")
     .insert({
@@ -252,7 +240,7 @@ export async function sendFileMessage({
 }
 
 export function subscribeToRoomMessages(roomId: string, onInsert: (payload: ChatMessage) => void) {
-  const supabase = getSupabaseClient();
+  const supabase = createClient();
   const channel = supabase
     .channel(`room-${roomId}`)
     .on(
@@ -274,4 +262,3 @@ export function subscribeToRoomMessages(roomId: string, onInsert: (payload: Chat
     supabase.removeChannel(channel);
   };
 }
-

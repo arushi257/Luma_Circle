@@ -2,72 +2,72 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { createClient } from "@/utils/supabase/client"; // Use the new client
+import { User } from "@supabase/supabase-js";
 
 export type UserRole = "member" | "admin";
 
 export type SessionUser = {
   email: string;
   role: UserRole | null;
+  id: string; // Added ID as it is often needed
 };
-
-const SESSION_KEY = "lc-session";
-
-/**
- * Reads the client-side session persisted by the OTP flow. Accepts both the current
- * `{ stage, email, userRole }` shape and a minimal `{ email, role }` shape.
- */
-export function loadSession(): SessionUser | null {
-  if (typeof window === "undefined") return null;
-  const raw = localStorage.getItem(SESSION_KEY);
-  if (!raw) return null;
-
-  try {
-    const parsed = JSON.parse(raw) as
-      | { stage?: string; email?: string; userRole?: UserRole | null }
-      | SessionUser;
-
-    const email = (parsed as SessionUser).email || parsed.email;
-    const role = (parsed as SessionUser).role ?? (parsed as { userRole?: UserRole }).userRole ?? null;
-    const stage = (parsed as { stage?: string }).stage;
-    if (!email) return null;
-
-    // Require dashboard stage if present; otherwise accept legacy minimal sessions.
-    if (stage && stage !== "dashboard") return null;
-    return { email, role };
-  } catch {
-    return null;
-  }
-}
-
-export function saveSession(session: SessionUser) {
-  if (typeof window === "undefined") return;
-  localStorage.setItem(
-    SESSION_KEY,
-    JSON.stringify({ stage: "dashboard", email: session.email, userRole: session.role }),
-  );
-}
-
-export function clearSession() {
-  if (typeof window === "undefined") return;
-  localStorage.removeItem(SESSION_KEY);
-}
 
 export function useClientSession(options?: { require?: boolean; redirectTo?: string }) {
   const { require = false, redirectTo = "/" } = options ?? {};
   const router = useRouter();
   const [session, setSession] = useState<SessionUser | null>(null);
   const [ready, setReady] = useState(false);
+  const supabase = createClient();
 
   useEffect(() => {
-    const current = loadSession();
-    setSession(current);
-    setReady(true);
+    async function getUser() {
+      // 1. Get the current Auth User
+      const { data: { user } } = await supabase.auth.getUser();
 
-    if (require && !current) {
-      router.push(redirectTo);
+      if (!user?.email) {
+        setSession(null);
+        setReady(true);
+        if (require) router.push(redirectTo);
+        return;
+      }
+
+      // 2. Fetch extra profile data (like Role) from the database
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("role")
+        .eq("id", user.id)
+        .single();
+
+      // 3. Set the session state
+      setSession({
+        id: user.id,
+        email: user.email,
+        role: (profile?.role as UserRole) || "member",
+      });
+      setReady(true);
     }
+
+    // Listen for auth changes (sign in, sign out)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_IN" || event === "SIGNED_OUT") {
+        getUser();
+      }
+    });
+
+    getUser();
+
+    return () => {
+      subscription.unsubscribe();
+    };
   }, [require, redirectTo, router]);
 
   return { session, ready };
 }
 
+// Helper to sign out
+export async function signOut() {
+  const supabase = createClient();
+  await supabase.auth.signOut();
+  if (typeof window !== "undefined") window.location.href = "/";
+}

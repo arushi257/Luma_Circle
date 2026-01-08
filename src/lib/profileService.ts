@@ -1,106 +1,63 @@
-import { getSupabaseClient } from "./supabaseClient";
+import { createClient } from "@/utils/supabase/client";
 
-export type UserProfile = {
-  email: string;
-  name: string | null;
-  username: string | null;
-  password_hash: string | null;
-  has_completed_profile: boolean;
-  created_at?: string;
-  updated_at?: string;
-};
+const supabase = createClient();
 
-/**
- * Hash a password using SHA-256 (client-side hashing for storage).
- * Note: This is a simple hash for demo purposes. Production should use bcrypt/argon2 server-side.
- */
-export async function hashPassword(password: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(password);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  const hashHex = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
-  return hashHex;
-}
-
-/**
- * Fetch a user's profile from Supabase by email.
- */
-export async function fetchProfile(email: string): Promise<UserProfile | null> {
-  const supabase = getSupabaseClient();
+// Fetch profile data
+export async function fetchProfile(email: string) {
   const { data, error } = await supabase
     .from("profiles")
-    .select("*")
+    .select("name, username")
     .eq("email", email)
-    .maybeSingle();
+    .single();
 
   if (error) {
-    console.error("Error fetching profile:", error);
+    // console.log(error); // Uncomment for debugging
     return null;
   }
-
-  return data as UserProfile | null;
+  return data;
 }
 
-/**
- * Create or update a user's profile in Supabase.
- */
-export async function upsertProfile(profile: {
-  email: string;
-  name: string;
-  username: string;
-  passwordHash?: string;
-}): Promise<{ ok: boolean; error?: string }> {
-  const supabase = getSupabaseClient();
-
-  const payload: Partial<UserProfile> = {
-    email: profile.email,
-    name: profile.name,
-    username: profile.username,
-    has_completed_profile: true,
-  };
-
-  if (profile.passwordHash) {
-    payload.password_hash = profile.passwordHash;
-  }
-
-  const { error } = await supabase
-    .from("profiles")
-    .upsert(payload, { onConflict: "email" });
-
-  if (error) {
-    console.error("Error upserting profile:", error);
-    return { ok: false, error: error.message };
-  }
-
-  return { ok: true };
-}
-
-/**
- * Check if a user has completed their profile setup.
- */
-export async function checkProfileComplete(email: string): Promise<boolean> {
-  const profile = await fetchProfile(email);
-  return profile?.has_completed_profile ?? false;
-}
-
-/**
- * Check if a username is already taken by another user.
- */
-export async function isUsernameTaken(username: string, currentEmail: string): Promise<boolean> {
-  const supabase = getSupabaseClient();
-  const { data, error } = await supabase
+// Check if username exists (excluding the current user)
+export async function isUsernameTaken(username: string, currentEmail: string) {
+  const { data } = await supabase
     .from("profiles")
     .select("email")
     .eq("username", username)
-    .neq("email", currentEmail)
-    .maybeSingle();
+    .neq("email", currentEmail) 
+    .single();
 
-  if (error) {
-    console.error("Error checking username:", error);
-    return false;
-  }
-
-  return data !== null;
+  return !!data; // Returns true if username is taken
 }
 
+// Update Profile Data
+export async function upsertProfile(data: { 
+  email: string; 
+  name: string; 
+  username: string 
+}) {
+  const { error } = await supabase
+    .from("profiles")
+    .update({ 
+      name: data.name, 
+      username: data.username,
+      has_completed_profile: true
+    })
+    .eq("email", data.email);
+
+  if (error) {
+    return { ok: false, error: error.message };
+  }
+  return { ok: true };
+}
+
+// Update Password (uses Supabase Auth)
+export async function updateUserPassword(password: string) {
+  const { error } = await supabase.auth.updateUser({
+    password: password
+  });
+
+  if (error) {
+    return { ok: false, error: error.message };
+  }
+  return { ok: true };
+}

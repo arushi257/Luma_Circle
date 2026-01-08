@@ -1,33 +1,38 @@
+import { createClient } from "@/utils/supabase/server";
 import { NextResponse } from "next/server";
-import { getUser, listPendingAdminRequests } from "@/lib/userStore";
-
-const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export async function POST(request: Request) {
-  const { adminEmail } = await request.json();
+  const supabase = await createClient();
 
-  if (!adminEmail || typeof adminEmail !== "string" || !emailRegex.test(adminEmail)) {
-    return NextResponse.json(
-      { ok: false, message: "Valid admin email is required." },
-      { status: 400 },
-    );
+  // 1. Check if the requester is an Admin
+  const { data: { user } } = await supabase.auth.getUser();
+  
+  if (!user) {
+    return NextResponse.json({ ok: false, message: "Not authenticated" }, { status: 401 });
   }
 
-  const normalizedAdminEmail = adminEmail.toLowerCase();
-  const adminRecord = getUser(normalizedAdminEmail);
+  const { data: adminProfile } = await supabase
+    .from('profiles')
+    .select('role')
+    .eq('id', user.id)
+    .single();
 
-  if (!adminRecord || adminRecord.role !== "admin") {
-    return NextResponse.json(
-      { ok: false, message: "Admin privileges required." },
-      { status: 403 },
-    );
+  if (adminProfile?.role !== 'admin') {
+    return NextResponse.json({ ok: false, message: "Admin privileges required." }, { status: 403 });
   }
 
-  const pending = listPendingAdminRequests();
+  // 2. Fetch all users waiting for approval
+  const { data: pendingUsers, error } = await supabase
+    .from('profiles')
+    .select('id, email, full_name, username') // Select only what you need
+    .eq('role', 'pending_admin');
+
+  if (error) {
+    return NextResponse.json({ ok: false, message: error.message }, { status: 500 });
+  }
 
   return NextResponse.json({
     ok: true,
-    pending,
+    pending: pendingUsers,
   });
 }
-

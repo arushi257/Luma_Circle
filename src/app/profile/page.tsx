@@ -2,16 +2,17 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useClientSession } from "@/lib/auth";
-import { useTheme } from "@/context/ThemeContext";
-import { fetchProfile, upsertProfile, hashPassword, isUsernameTaken } from "@/lib/profileService";
+import { useClientSession } from "@/lib/auth"; // Ensure this path is correct for your project
+import { useTheme } from "@/context/ThemeContext"; // Ensure this path is correct
+import { fetchProfile, isUsernameTaken, upsertProfile, updateUserPassword } from "@/lib/profileService"; // Ensure these functions are implemented
 
 function ProfileContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { session, ready } = useClientSession({ require: true });
+  const { session, ready } = useClientSession({ require: true }); 
   const { isDark } = useTheme();
 
+  // Styles
   const pageBackground = isDark
     ? "bg-[radial-gradient(circle_at_20%_20%,#2f184d_0%,#130c26_45%,#05030d_100%)] text-[#f4edff]"
     : "bg-gradient-to-br from-[#fdf3e8] via-[#f8e7ff] to-[#ffe4d1] text-slate-900";
@@ -45,12 +46,17 @@ function ProfileContent() {
 
     async function loadProfile() {
       if (!session) return;
-      const profile = await fetchProfile(session.email);
-      if (profile) {
-        setName(profile.name || "");
-        setUsername(profile.username || "");
+      try {
+        const profile = await fetchProfile(session.email);
+        if (profile) {
+          setName(profile.name || "");
+          setUsername(profile.username || "");
+        }
+      } catch (err) {
+        console.error("Failed to load profile", err);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     }
 
     loadProfile();
@@ -63,7 +69,7 @@ function ProfileContent() {
 
     if (!session) return;
 
-    // Validation
+    // --- Validation ---
     if (!name.trim()) {
       setError("Name is required.");
       return;
@@ -79,39 +85,41 @@ function ProfileContent() {
       return;
     }
 
-    // Check username uniqueness
-    if (username.trim()) {
-      const taken = await isUsernameTaken(username.trim(), session.email);
-      if (taken) {
-        setError("Username is already taken. Please choose another.");
-        return;
-      }
-    }
-
     setSaving(true);
 
     try {
-      let passwordHash: string | undefined;
-      if (password.trim()) {
-        passwordHash = await hashPassword(password);
+      // 1. Check if Username is Taken
+      if (username.trim()) {
+        const taken = await isUsernameTaken(username.trim(), session.email);
+        if (taken) {
+          throw new Error("Username is already taken. Please choose another.");
+        }
       }
 
-      const result = await upsertProfile({
+      // 2. Update Password (if provided)
+      if (password.trim()) {
+        const passResult = await updateUserPassword(password);
+        if (!passResult.ok) {
+          throw new Error(passResult.error || "Failed to update password.");
+        }
+      }
+
+      // 3. Update Profile Data in Supabase
+      const profileResult = await upsertProfile({
         email: session.email,
         name: name.trim(),
         username: username.trim(),
-        passwordHash,
       });
 
-      if (!result.ok) {
-        throw new Error(result.error || "Failed to save profile.");
+      if (!profileResult.ok) {
+        throw new Error(profileResult.error || "Failed to save profile.");
       }
 
+      // Success
       setMessage("Profile saved successfully!");
-      setPassword(""); // Clear password field
+      setPassword(""); // Clear password for security
 
       if (isSetupMode) {
-        // Redirect to dashboard after setup
         setTimeout(() => {
           router.push("/");
           router.refresh();
